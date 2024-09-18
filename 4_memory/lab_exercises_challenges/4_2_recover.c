@@ -7,6 +7,7 @@ typedef uint8_t BYTE;
 const int BLOCK = 512;
 
 int isJpeg(BYTE buff[]);
+void writeBuffer(BYTE *buff, FILE *stream);
 
 int main(int argc, char *argv[])
 {
@@ -38,31 +39,22 @@ int main(int argc, char *argv[])
         // Check if is the start of a jpeg
         if (isJpeg(buffer) == 1) {
             // If it's the first jpeg
-            if (jpegCount == 0) {
-                // Config filename and open new jpg file
-                sprintf(filename, "%03i.jpg", jpegCount);
-                img = fopen(filename, "w");
-                // Write current buffer to file
-                fwrite(&buffer, sizeof(BYTE), BLOCK, img);
-            }
-            // If a jpeg was already created in the past
-            else {
+            if (jpegCount > 0) {
                 // Close past jpeg
                 fclose(img);
-                // Config new filename and open new jpg file
-                sprintf(filename, "%03i.jpg", jpegCount);
-                img = fopen(filename, "w");
-                // Write current buffer to file
-                fwrite(&buffer, sizeof(BYTE), BLOCK, img);
             }
+            // Config new filename and open new jpg file
+            sprintf(filename, "%03i.jpg", jpegCount);
+            img = fopen(filename, "w");
+            // Write current buffer to file
+            writeBuffer(buffer, img);
             jpegCount++;
             continue;
         }
         // If jpeg > 0 and it's not a jpeg keep writing to current jpeg
         if (jpegCount > 0) {
-            // Open current jpeg
             // Write current buffer
-            fwrite(&buffer, sizeof(BYTE), BLOCK, img);
+            writeBuffer(buffer, img);
         }
     }
     fclose(card);
@@ -77,4 +69,9 @@ int isJpeg(BYTE buff[]) {
         return 1;
     }
     return 0;
+}
+
+// Helper function to reduce code smell when writing to a file
+void writeBuffer(BYTE *buff, FILE *stream) {
+    fwrite(buff, sizeof(BYTE), BLOCK, stream);
 }
