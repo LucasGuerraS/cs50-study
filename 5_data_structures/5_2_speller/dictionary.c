@@ -1,196 +1,167 @@
-// Implements a spell-checker
+// Implements a dictionary's functionality
 
 #include <ctype.h>
 #include <stdio.h>
-#include <sys/resource.h>
-#include <sys/time.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <strings.h>
+#include <string.h>
 
 #include "dictionary.h"
 
-// Undefine any definitions
-#undef calculate
-#undef getrusage
-
-// Default dictionary
-#define DICTIONARY "dictionaries/large"
-
-// Prototype
-double calculate(const struct rusage *b, const struct rusage *a);
-
-int main(int argc, char *argv[])
+// Represents a node in a hash table
+typedef struct node
 {
-    // Check for correct number of args
-    if (argc != 2 && argc != 3)
-    {
-        printf("Usage: ./speller [DICTIONARY] text\n");
-        return 1;
-    }
-
-    // Structures for timing data
-    struct rusage before, after;
-
-    // Benchmarks
-    double time_load = 0.0, time_check = 0.0, time_size = 0.0, time_unload = 0.0;
-
-    // Determine dictionary to use
-    char *dictionary = (argc == 3) ? argv[1] : DICTIONARY;
-
-    // Load dictionary
-    getrusage(RUSAGE_SELF, &before);
-    bool loaded = load(dictionary);
-    getrusage(RUSAGE_SELF, &after);
-
-    // Exit if dictionary not loaded
-    if (!loaded)
-    {
-        printf("Could not load %s.\n", dictionary);
-        return 1;
-    }
-
-    // Calculate time to load dictionary
-    time_load = calculate(&before, &after);
-
-    // Try to open text
-    char *text = (argc == 3) ? argv[2] : argv[1];
-    FILE *file = fopen(text, "r");
-    if (file == NULL)
-    {
-        printf("Could not open %s.\n", text);
-        unload();
-        return 1;
-    }
-
-    // Prepare to report misspellings
-    printf("\nMISSPELLED WORDS\n\n");
-
-    // Prepare to spell-check
-    int index = 0, misspellings = 0, words = 0;
     char word[LENGTH + 1];
+    struct node *next;
+} node;
 
-    // Spell-check each word in text
-    char c;
-    while (fread(&c, sizeof(char), 1, file))
-    {
-        // Allow only alphabetical characters and apostrophes
-        if (isalpha(c) || (c == '\'' && index > 0))
-        {
-            // Append character to word
-            word[index] = c;
-            index++;
+// Number of buckets in hash table
+const unsigned int N = 26;
 
-            // Ignore alphabetical strings too long to be words
-            if (index > LENGTH)
-            {
-                // Consume remainder of alphabetical string
-                while (fread(&c, sizeof(char), 1, file) && isalpha(c));
+// Hash table
+node *table[N];
+// Helper hash value
+unsigned int hash_value;
+// Helper word count
+int words = 0;
 
-                // Prepare for new word
-                index = 0;
-            }
-        }
+void freespace(node *n);
 
-        // Ignore words with numbers (like MS Word can)
-        else if (isdigit(c))
-        {
-            // Consume remainder of alphanumeric string
-            while (fread(&c, sizeof(char), 1, file) && isalnum(c));
-
-            // Prepare for new word
-            index = 0;
-        }
-
-        // We must have found a whole word
-        else if (index > 0)
-        {
-            // Terminate current word
-            word[index] = '\0';
-
-            // Update counter
-            words++;
-
-            // Check word's spelling
-            getrusage(RUSAGE_SELF, &before);
-            bool misspelled = !check(word);
-            getrusage(RUSAGE_SELF, &after);
-
-            // Update benchmark
-            time_check += calculate(&before, &after);
-
-            // Print word if misspelled
-            if (misspelled)
-            {
-                printf("%s\n", word);
-                misspellings++;
-            }
-
-            // Prepare for next word
-            index = 0;
-        }
+// Returns true if word is in dictionary, else false
+bool check(const char *word)
+{
+    // Find which index the word should be indexed at
+    hash_value = hash(word);
+    // Check if first occurence is the word
+    if (strcasecmp(word, table[hash_value] -> word) == 0) {
+        return true;
     }
-
-    // Check whether there was an error
-    if (ferror(file))
+    // Set tmp to next occurence
+    node *tmp = table[hash_value] -> next;
+    // While tmp is not null search for the word in bucket
+    while (tmp != NULL)
     {
-        fclose(file);
-        printf("Error reading %s.\n", text);
-        unload();
-        return 1;
+        if (strcasecmp(word, tmp -> word) == 0) {
+            return true;
+        }
+        // Set temp to be next value within current index
+        tmp = tmp -> next;
     }
-
-    // Close text
-    fclose(file);
-
-    // Determine dictionary's size
-    getrusage(RUSAGE_SELF, &before);
-    unsigned int n = size();
-    getrusage(RUSAGE_SELF, &after);
-
-    // Calculate time to determine dictionary's size
-    time_size = calculate(&before, &after);
-
-    // Unload dictionary
-    getrusage(RUSAGE_SELF, &before);
-    bool unloaded = unload();
-    getrusage(RUSAGE_SELF, &after);
-
-    // Abort if dictionary not unloaded
-    if (!unloaded)
-    {
-        printf("Could not unload %s.\n", dictionary);
-        return 1;
-    }
-
-    // Calculate time to unload dictionary
-    time_unload = calculate(&before, &after);
-
-    // Report benchmarks
-    printf("\nWORDS MISSPELLED:     %d\n", misspellings);
-    printf("WORDS IN DICTIONARY:  %d\n", n);
-    printf("WORDS IN TEXT:        %d\n", words);
-    printf("TIME IN load:         %.2f\n", time_load);
-    printf("TIME IN check:        %.2f\n", time_check);
-    printf("TIME IN size:         %.2f\n", time_size);
-    printf("TIME IN unload:       %.2f\n", time_unload);
-    printf("TIME IN TOTAL:        %.2f\n\n",
-           time_load + time_check + time_size + time_unload);
-
-    // Success
-    return 0;
+    return false;
 }
 
-// Returns number of seconds between b and a
-double calculate(const struct rusage *b, const struct rusage *a)
+// Hashes word to a number
+unsigned int hash(const char *word)
 {
-    if (b == NULL || a == NULL)
+    // Hash function that takes the first 2 letters and hashes to a index in the hash table
+    return toupper(word[0]) - 'A';
+}
+
+// Loads dictionary into memory, returning true if successful, else false
+bool load(const char *dictionary)
+{
+    FILE *buffer = fopen(dictionary, "r");
+    if (buffer != NULL)
     {
-        return 0.0;
+        // Prepare to load dictionary with auxiliary variables
+        // Index of the curr word
+        int index = 0;
+        // Word variable to be mounted from char sequence
+        char w[LENGTH + 1];
+        // Current char in stream
+        char c;
+        // While reading the file
+        while (fread(&c, sizeof(char), 1, buffer))
+        {
+            // If char is not EOL add char to current word and proceed to next index
+            if (c != 10)
+            {
+                w[index] = c;
+                index++;
+            }
+            // If char is EOL add current word to the hash adding \0 to the last index table and reset aux variables
+            else if (c == 10)
+            {
+                // Format word to be recognized as a string correctly with \0
+                w[index] = '\0';
+                // Run hashing function to get bucket
+                hash_value = hash(w);
+                // Update words count
+                words++;
+                // Move index back to 0
+                index = 0;
+                // Save word to memory allocating memory for a root node if it's nil or going until last node in bucket
+                // If current node still doesn't exist allocate memory for it and create word
+                if (table[hash_value] == NULL) {
+                    table[hash_value] = malloc(sizeof(node));
+                    // Handle malloc error
+                    if (table[hash_value] == NULL) {
+                        printf("Memory allocation error");
+                        return false;
+                    }
+                    // Copy string to string slot
+                    strcpy(table[hash_value] -> word, w);
+                    // Set next to NULL as its the root node
+                    table[hash_value] -> next = NULL;
+                }
+                // If current node already exists iterate until next is null and create new node
+                else
+                {
+                    // Get current node, root at first
+                    node *curr = table[hash_value];
+                    // Iterate and update curr until end is reached
+                    while (curr -> next != NULL)
+                    {
+                        curr = curr -> next;
+                    }
+                    // Allocate memory for the new ndoe
+                    node *tmp = malloc(sizeof(node));
+                    // Handle memory allocation error
+                    if (tmp == NULL) {
+                        printf("Memory allocation error");
+                        return false;
+                    }
+                    // Copy word to word slot in tmp
+                    strcpy(tmp -> word, w);
+                    // Set next to NULL
+                    tmp -> next = NULL;
+                    // Set curr next to tmp
+                    curr -> next = tmp;
+                }
+            }
+        }
+        // Close dictionary
+        fclose(buffer);
+        return true;
     }
-    else
+    return false;
+}
+
+// Returns number of words in dictionary if loaded, else 0 if not yet loaded
+unsigned int size(void)
+{
+    return words;
+}
+
+// Unloads dictionary from memory, returning true if successful, else false
+bool unload(void)
+{
+    // Recursive function that will go until the base case of each bucket index and free space
+    for (int i = 0; i < 26; i++)
     {
-        return ((((a->ru_utime.tv_sec * 1000000 + a->ru_utime.tv_usec) -
-                  (b->ru_utime.tv_sec * 1000000 + b->ru_utime.tv_usec)) +
-                 ((a->ru_stime.tv_sec * 1000000 + a->ru_stime.tv_usec) -
-                  (b->ru_stime.tv_sec * 1000000 + b->ru_stime.tv_usec)))
-                / 1000000.0);
+        freespace(table[i]);
     }
+    return true;
+}
+
+void freespace(node *n)
+{
+    if (n -> next == NULL) {
+        free(n);
+        return;
+    }
+    freespace(n -> next);
+    free(n);
+    return;
 }
